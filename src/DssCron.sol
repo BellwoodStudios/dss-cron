@@ -19,6 +19,7 @@ contract DssCron {
     modifier auth { require(wards[msg.sender] == 1); _; }
 
     VatAbstract immutable public vat;
+    address immutable public vow;
     mapping (bytes32 => Bounty) public bounties;
     uint256 private locked;
 
@@ -34,10 +35,11 @@ contract DssCron {
     event Deny(address indexed usr);
 
     // --- Init ---
-    constructor(address vat_) public {
+    constructor(address vat_, address vow_) public {
         wards[msg.sender] = 1;
         emit Rely(msg.sender);
         vat = VatAbstract(vat_);
+        vow = vow_;
     }
 
     // --- Math ---
@@ -55,11 +57,11 @@ contract DssCron {
         require(mask.length == args.length, "DssCron/mask-args-length-not-matching");
         require(mask.length % 32 == 0, "DssCron/mask-bad-abi-encoding");
         uint256 len32 = mask.length / 32;
-        bytes[mask.length] memory result;
+        bytes memory result = new bytes(mask.length);
         // Perform a bitwise AND on the mask and args at 32 byte width
-        for (int i = 0; i < len32; i++) {
+        for (uint256 i = 0; i < len32; i++) {
             assembly {
-                mstore(add(and(mload(add(mask, add(0x20, i))), mload(add(args, add(0x20, i)))), add(0x20, i)), r)
+                mstore(add(result, add(0x20, i)), add(and(mload(add(mask, add(0x20, i))), mload(add(args, add(0x20, i)))), add(0x20, i)))
             }
         }
         return keccak256(abi.encode(target, selector, mask, result));
@@ -86,8 +88,8 @@ contract DssCron {
         (bool success,) = target.call(abi.encodeWithSelector(selector, args));
         if (success) {
             // You've earned the reward (might be 0)
-            vat.suck(vow, usr, mul(sub(block.timestamp, rho), rate));
-            rho = block.timestamp;
+            vat.suck(vow, usr, mul(sub(block.timestamp, bounties[key].rho), bounties[key].rate));
+            bounties[key].rho = block.timestamp;
         }
     }
 

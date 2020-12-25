@@ -1,8 +1,6 @@
 pragma solidity ^0.6.7;
 
 import "ds-test/test.sol";
-import {Vat} from "dss/vat.sol";
-import {Vow} from "dss/vow.sol";
 
 import "./DssCron.sol";
 
@@ -10,12 +8,31 @@ interface Hevm {
     function warp(uint256) external;
 }
 
-contract TestVow is Vow {
-    constructor(address vat, address flapper, address flopper) public Vow(vat, flapper, flopper) {}
+contract TestVat {
+
+    mapping (address => uint256) public dai;
+    mapping (address => uint256) public sin;
+
+    function suck(address u, address v, uint256 rad) public {
+        sin[u] = sin[u] + rad;
+        dai[v] = dai[v] + rad;
+    }
+
+}
+
+contract TestVow {
+
+    TestVat public vat;
+
+    constructor(address vat_) public {
+        vat = TestVat(vat_);
+    }
+
     // Total deficit
     function Awe() public view returns (uint256) {
         return vat.sin(address(this));
     }
+
 }
 
 contract TargetSystem {
@@ -48,7 +65,7 @@ contract DssCronTest is DSTest {
 
     address me;
 
-    Vat vat;
+    TestVat vat;
     TestVow vow;
 
     DssCron cron;
@@ -67,17 +84,107 @@ contract DssCronTest is DSTest {
 
         me = address(this);
 
-        vat = new Vat();
-        vow = new TestVow(address(vat), address(0), address(0));
+        vat = new TestVat();
+        vow = new TestVow(address(vat));
 
         cron = new DssCron(address(vat), address(vow));
-        vat.rely(address(cron));
 
-        target = new targetSystem();
+        target = new TargetSystem();
     }
 
     function test_register_no_args() public {
         cron.register(address(target), target.funcNoArgs.selector, "", "", rad(1 ether));
+        bytes memory result = "";
+        (uint256 rate,) = cron.bounties(keccak256(abi.encode(address(target), target.funcNoArgs.selector, result)));
+        assertEq(rate, rad(1 ether));
     }
+
+    function test_register_one_variable_arg() public {
+        bytes memory mask = abi.encode(0);
+        bytes memory args = abi.encode(123);
+        cron.register(address(target), target.funcOneArg.selector, mask, args, rad(1 ether));
+        bytes memory result = abi.encode(0);
+        (uint256 rate,) = cron.bounties(keccak256(abi.encode(address(target), target.funcOneArg.selector, result)));
+        assertEq(rate, rad(1 ether));
+    }
+
+    function test_register_one_fixed_arg() public {
+        bytes memory mask = abi.encode(uint256(-1));
+        bytes memory args = abi.encode(123);
+        cron.register(address(target), target.funcOneArg.selector, mask, args, rad(1 ether));
+        bytes memory result = abi.encode(123);
+        (uint256 rate,) = cron.bounties(keccak256(abi.encode(address(target), target.funcOneArg.selector, result)));
+        assertEq(rate, rad(1 ether));
+    }
+
+    function test_claim_one_fixed_arg() public {
+        bytes memory mask = abi.encode(uint256(-1));
+        bytes memory args = abi.encode(123);
+        cron.register(address(target), target.funcOneArg.selector, mask, args, rad(1 ether));
+
+        hevm.warp(now + 1);
+        
+        cron.claim(me, address(target), target.funcOneArg.selector, mask, args);
+
+        assertEq(vat.dai(me), rad(1 ether));
+    }
+
+    function test_claim_one_fixed_arg_wrong_arg() public {
+        bytes memory mask = abi.encode(uint256(-1));
+        bytes memory args = abi.encode(123);
+        cron.register(address(target), target.funcOneArg.selector, mask, args, rad(1 ether));
+
+        hevm.warp(now + 1);
+        
+        bytes memory claimArgs = abi.encode(456);
+        cron.claim(me, address(target), target.funcOneArg.selector, mask, claimArgs);
+
+        assertEq(vat.dai(me), rad(0 ether));
+    }
+
+    function test_claim_one_variable_arg() public {
+        bytes memory mask = abi.encode(0);
+        bytes memory args = abi.encode(123);
+        cron.register(address(target), target.funcOneArg.selector, mask, args, rad(1 ether));
+
+        hevm.warp(now + 1);
+        
+        bytes memory claimArgs = abi.encode(456);
+        cron.claim(me, address(target), target.funcOneArg.selector, mask, claimArgs);
+
+        assertEq(vat.dai(me), rad(1 ether));
+    }
+
+    function test_claim_one_fixed_one_variable_arg() public {
+        bytes memory mask = abi.encode(uint256(-1), 0);
+        bytes memory args = abi.encode(123, 0);
+        cron.register(address(target), target.funcTwoArgs.selector, mask, args, rad(1 ether));
+
+        hevm.warp(now + 1);
+        
+        bytes memory claimArgs = abi.encode(123, 456);
+        cron.claim(me, address(target), target.funcTwoArgs.selector, mask, claimArgs);
+
+        assertEq(vat.dai(me), rad(1 ether));
+    }
+
+    function test_claim_two_unaligned_args() public {
+        bytes memory mask = abi.encode(uint256(-1), 0);
+        bytes memory args = abi.encode(123, 0);
+        cron.register(address(target), target.funcTwoArgsUnaligned.selector, mask, args, rad(1 ether));
+
+        hevm.warp(now + 1);
+        
+        bytes memory claimArgs = abi.encode(123, 456);
+        cron.claim(me, address(target), target.funcTwoArgsUnaligned.selector, mask, claimArgs);
+
+        assertEq(vat.dai(me), rad(1 ether));
+    }
+
+    // TODO
+    // - test failure modes
+    // - test argument values are correct
+    // - test more types of arguments
+    // - test partial masking 
 
 }

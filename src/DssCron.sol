@@ -61,10 +61,10 @@ contract DssCron {
         // Perform a bitwise AND on the mask and args at 32 byte width
         for (uint256 i = 0; i < len32; i++) {
             assembly {
-                mstore(add(result, add(0x20, i)), add(and(mload(add(mask, add(0x20, i))), mload(add(args, add(0x20, i)))), add(0x20, i)))
+                mstore(add(result, add(0x20, i)), and(mload(add(mask, add(0x20, i))), mload(add(args, add(0x20, i)))))
             }
         }
-        return keccak256(abi.encode(target, selector, mask, result));
+        return keccak256(abi.encode(target, selector, result));
     }
 
     // Register a bounty for a particular function, on a particular contract
@@ -90,6 +90,8 @@ contract DssCron {
             // You've earned the reward (might be 0)
             vat.suck(vow, usr, mul(sub(block.timestamp, bounties[key].rho), bounties[key].rate));
             bounties[key].rho = block.timestamp;
+        } else {
+            revert("DssCron/call-revert");
         }
     }
 

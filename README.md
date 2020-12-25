@@ -1,6 +1,6 @@
 # dss-cron
 
-Allow placing bounties that increase over time on maintenance functions that otherwise require altruistic keepers to maintain. The goal of this module is the incentivize a market for keepers to maintain the state of Maker. Dai is paid out of the surplus buffer to cover gas costs and enable profiting off of system maintenance.
+Allow placing bounties that increase over time on maintenance functions that otherwise require altruistic keepers to maintain. The goal of this module is to incentivize a market for keepers to maintain the state of Maker. Dai is paid out of the surplus buffer to cover gas costs and enable profiting off of system maintenance.
 
 Currently a few trusted individuals are maintaining the state of Maker. This involves things such as calling `jug.drip(ilk)` periodically as well as new functionality such as `dciam.exec(ilk)`. `dss-cron` solves this by producing a market for keepers to execute these actions competatively. Governance will be able to set bounties that increase over time which can be claimed by any keeper which successfully executes the desired action.
 

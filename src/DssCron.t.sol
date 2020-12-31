@@ -57,6 +57,10 @@ contract TargetSystem {
         require(false);
     }
 
+    function funcCondFailure(uint256 condition) external {
+        require(condition == 1 || condition == 5);
+    }
+
 }
 
 contract DssCronTest is DSTest {
@@ -92,93 +96,166 @@ contract DssCronTest is DSTest {
         target = new TargetSystem();
     }
 
+    // COPIED out of DssCron because this should remain internal
+    // Also remove end hash to compare source bytes
+    function generateKey(address target, bytes memory data, uint256 mask) internal pure returns (bytes memory) {
+        // 4 byte func sig + 32 bytes / arg
+        require(data.length % 32 == 4, "DssCron/data-bad-abi-encoding");
+        uint256 nargs = (data.length - 4) / 32;
+        bytes memory result = new bytes(data.length);
+
+        // Store the function signature
+        for (uint256 i = 0; i < 4; i++) {
+            result[i] = data[i];
+        }
+
+        // Perform a bitwise AND on the mask and data at 32 byte width
+        for (uint256 i = 0; i < nargs; i++) {
+            assembly {
+                mstore(
+                    add(result, add(0x24, i)),
+                    and(
+                        mload(add(data, add(0x24, i))),
+                        not(sub(and(0x01, shr(i, mask)), 1))
+                    )
+                )
+            }
+        }
+        return abi.encode(target, result, mask);
+    }
+
+    function test_variable_key_hash() public {
+        bytes memory data = abi.encodeWithSelector(target.funcOneArg.selector, 123);
+        bytes memory expectedData = abi.encodeWithSelector(target.funcOneArg.selector, 0);
+        assertEq(expectedData.length, 36);
+        assertEq(expectedData[0], target.funcOneArg.selector[0]);
+        assertEq(expectedData[1], target.funcOneArg.selector[1]);
+        assertEq(expectedData[2], target.funcOneArg.selector[2]);
+        assertEq(expectedData[3], target.funcOneArg.selector[3]);
+        bytes memory expectedKey = abi.encode(address(target), expectedData, 0x00);
+        bytes memory resultKey = generateKey(address(target), data, 0x00);
+        assertEq0(resultKey, expectedKey);
+    }
+
+    function test_fixed_key_hash() public {
+        bytes memory data = abi.encodeWithSelector(target.funcOneArg.selector, 123);
+        bytes memory expectedData = abi.encodeWithSelector(target.funcOneArg.selector, 123);
+        assertEq(expectedData.length, 36);
+        assertEq(expectedData[0], target.funcOneArg.selector[0]);
+        assertEq(expectedData[1], target.funcOneArg.selector[1]);
+        assertEq(expectedData[2], target.funcOneArg.selector[2]);
+        assertEq(expectedData[3], target.funcOneArg.selector[3]);
+        assertEq(uint256(uint8(expectedData[35])), 123);
+        bytes memory expectedKey = abi.encode(address(target), expectedData, 0x01);
+        assertEq(uint256(uint8(expectedKey[163])), 123);
+        bytes memory resultKey = generateKey(address(target), data, 0x01);
+        assertEq0(expectedKey, resultKey);
+    }
+
     function test_register_no_args() public {
-        cron.register(address(target), target.funcNoArgs.selector, "", "", rad(1 ether));
-        bytes memory result = "";
-        (uint256 rate,) = cron.bounties(keccak256(abi.encode(address(target), target.funcNoArgs.selector, result)));
+        bytes memory data = abi.encodeWithSelector(target.funcNoArgs.selector);
+        cron.register(address(target), data, 0x00, rad(1 ether));
+        (uint256 rate,) = cron.bounties(keccak256(abi.encode(address(target), abi.encodeWithSelector(target.funcNoArgs.selector), 0x00)));
         assertEq(rate, rad(1 ether));
     }
 
     function test_register_one_variable_arg() public {
-        bytes memory mask = abi.encode(0);
-        bytes memory args = abi.encode(123);
-        cron.register(address(target), target.funcOneArg.selector, mask, args, rad(1 ether));
-        bytes memory result = abi.encode(0);
-        (uint256 rate,) = cron.bounties(keccak256(abi.encode(address(target), target.funcOneArg.selector, result)));
+        bytes memory data = abi.encodeWithSelector(target.funcOneArg.selector, 123);
+        cron.register(address(target), data, 0x00, rad(1 ether));      // Mask of 0 = variable
+        (uint256 rate,) = cron.bounties(keccak256(abi.encode(address(target), abi.encodeWithSelector(target.funcOneArg.selector, 0), 0x00)));
         assertEq(rate, rad(1 ether));
     }
 
     function test_register_one_fixed_arg() public {
-        bytes memory mask = abi.encode(uint256(-1));
-        bytes memory args = abi.encode(123);
-        cron.register(address(target), target.funcOneArg.selector, mask, args, rad(1 ether));
-        bytes memory result = abi.encode(123);
-        (uint256 rate,) = cron.bounties(keccak256(abi.encode(address(target), target.funcOneArg.selector, result)));
+        bytes memory data = abi.encodeWithSelector(target.funcOneArg.selector, 123);
+        cron.register(address(target), data, 0x01, rad(1 ether));      // Mask of 1 = first argument is fixed
+        (uint256 rate,) = cron.bounties(keccak256(abi.encode(address(target), abi.encodeWithSelector(target.funcOneArg.selector, 123), 0x01)));
         assertEq(rate, rad(1 ether));
     }
 
     function test_claim_one_fixed_arg() public {
-        bytes memory mask = abi.encode(uint256(-1));
-        bytes memory args = abi.encode(123);
-        cron.register(address(target), target.funcOneArg.selector, mask, args, rad(1 ether));
+        bytes memory data = abi.encodeWithSelector(target.funcOneArg.selector, 123);
+        cron.register(address(target), data, 0x01, rad(1 ether));
 
         hevm.warp(now + 1);
         
-        cron.claim(me, address(target), target.funcOneArg.selector, mask, args);
+        cron.claim(me, address(target), data, 0x01);
 
         assertEq(vat.dai(me), rad(1 ether));
     }
 
     function test_claim_one_fixed_arg_wrong_arg() public {
-        bytes memory mask = abi.encode(uint256(-1));
-        bytes memory args = abi.encode(123);
-        cron.register(address(target), target.funcOneArg.selector, mask, args, rad(1 ether));
+        bytes memory data = abi.encodeWithSelector(target.funcOneArg.selector, 123);
+        cron.register(address(target), data, 0x01, rad(1 ether));
 
         hevm.warp(now + 1);
         
-        bytes memory claimArgs = abi.encode(456);
-        cron.claim(me, address(target), target.funcOneArg.selector, mask, claimArgs);
+        bytes memory claimData = abi.encodeWithSelector(target.funcOneArg.selector, 456);
+        cron.claim(me, address(target), claimData, 0x01);
 
         assertEq(vat.dai(me), rad(0 ether));
     }
 
     function test_claim_one_variable_arg() public {
-        bytes memory mask = abi.encode(0);
-        bytes memory args = abi.encode(123);
-        cron.register(address(target), target.funcOneArg.selector, mask, args, rad(1 ether));
+        bytes memory data = abi.encodeWithSelector(target.funcOneArg.selector, 123);
+        cron.register(address(target), data, 0x00, rad(1 ether));
 
         hevm.warp(now + 1);
         
-        bytes memory claimArgs = abi.encode(456);
-        cron.claim(me, address(target), target.funcOneArg.selector, mask, claimArgs);
+        bytes memory claimData = abi.encodeWithSelector(target.funcOneArg.selector, 456);
+        cron.claim(me, address(target), claimData, 0x00);
 
         assertEq(vat.dai(me), rad(1 ether));
     }
 
     function test_claim_one_fixed_one_variable_arg() public {
-        bytes memory mask = abi.encode(uint256(-1), 0);
-        bytes memory args = abi.encode(123, 0);
-        cron.register(address(target), target.funcTwoArgs.selector, mask, args, rad(1 ether));
+        bytes memory data = abi.encodeWithSelector(target.funcTwoArgs.selector, 123, 0);
+        cron.register(address(target), data, 0x01, rad(1 ether));
 
         hevm.warp(now + 1);
         
-        bytes memory claimArgs = abi.encode(123, 456);
-        cron.claim(me, address(target), target.funcTwoArgs.selector, mask, claimArgs);
+        bytes memory claimData = abi.encodeWithSelector(target.funcTwoArgs.selector, 123, 456);
+        cron.claim(me, address(target), claimData, 0x01);
 
         assertEq(vat.dai(me), rad(1 ether));
     }
 
     function test_claim_two_unaligned_args() public {
-        bytes memory mask = abi.encode(uint256(-1), 0);
-        bytes memory args = abi.encode(123, 0);
-        cron.register(address(target), target.funcTwoArgsUnaligned.selector, mask, args, rad(1 ether));
+        bytes memory data = abi.encodeWithSelector(target.funcTwoArgsUnaligned.selector, 123, 0);
+        cron.register(address(target), data, 0x01, rad(1 ether));
 
         hevm.warp(now + 1);
         
-        bytes memory claimArgs = abi.encode(123, 456);
-        cron.claim(me, address(target), target.funcTwoArgsUnaligned.selector, mask, claimArgs);
+        bytes memory claimData = abi.encodeWithSelector(target.funcTwoArgsUnaligned.selector, 123, 456);
+        cron.claim(me, address(target), claimData, 0x01);
 
         assertEq(vat.dai(me), rad(1 ether));
+    }
+
+    function testFail_claim_revert_no_args() public {
+        bytes memory data = abi.encodeWithSelector(target.funcFailure.selector);
+        cron.register(address(target), data, 0x00, rad(1 ether));
+        hevm.warp(now + 1);
+        cron.claim(me, address(target), data, 0x00);
+    }
+
+    function test_claim_conditional_failure() public {
+        bytes memory data = abi.encodeWithSelector(target.funcCondFailure.selector, 0);
+        cron.register(address(target), data, 0x00, rad(1 ether));
+
+        hevm.warp(now + 1);
+        
+        bytes memory claimData1 = abi.encodeWithSelector(target.funcCondFailure.selector, 1);
+        cron.claim(me, address(target), claimData1, 0x00);
+
+        assertEq(vat.dai(me), rad(1 ether));
+
+        hevm.warp(now + 5);
+        
+        bytes memory claimData2 = abi.encodeWithSelector(target.funcCondFailure.selector, 5);
+        cron.claim(me, address(target), claimData2, 0x00);
+
+        assertEq(vat.dai(me), rad(6 ether));
     }
 
     // TODO

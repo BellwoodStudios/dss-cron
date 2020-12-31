@@ -12,7 +12,7 @@ Function arguments are specified as either `variable` or `fixed` using a bitwise
 
 ### No Argument Functions
 
-This would be something like `lerp.tick()` where no arguments are required.
+This would be something like `lerp.tick()` or `spot.poke()` where no arguments are required.
 
 ### Variable Argument Functions
 

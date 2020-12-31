@@ -33,9 +33,9 @@ contract DssCron {
     // --- Events ---
     event Rely(address indexed usr);
     event Deny(address indexed usr);
-    event Register(address target, bytes4 selector, bytes mask, bytes args, uint256 rate);
-    event Unregister(address target, bytes4 selector, bytes mask, bytes args);
-    event Claim(address target, bytes4 selector, bytes mask, bytes args, uint256 reward);
+    event Register(address target, bytes data, uint256 mask, uint256 rate);
+    event Unregister(address target, bytes data, uint256 mask);
+    event Claim(address target, bytes data, uint256 mask, uint256 reward);
 
     // --- Init ---
     constructor(address vat_, address vow_) public {
@@ -54,52 +54,66 @@ contract DssCron {
     }
 
     // Generates a key from a target contract, function selector and optional fixed args
-    // The mask is used to specify which parts of the argument can be variable
+    // The mask is used to specify which arguments can be variable
     // 1 = Fixed, 0 = Variable
-    function generateKey(address target, bytes4 selector, bytes memory mask, bytes memory args) internal pure returns (bytes32) {
-        require(mask.length == args.length, "DssCron/mask-args-length-not-matching");
-        require(mask.length % 32 == 0, "DssCron/mask-bad-abi-encoding");
-        uint256 len32 = mask.length / 32;
-        bytes memory result = new bytes(mask.length);
-        // Perform a bitwise AND on the mask and args at 32 byte width
-        for (uint256 i = 0; i < len32; i++) {
+    function generateKey(address target, bytes memory data, uint256 mask) internal pure returns (bytes32) {
+        // 4 byte func sig + 32 bytes / arg
+        require(data.length % 32 == 4, "DssCron/data-bad-abi-encoding");
+        uint256 nargs = (data.length - 4) / 32;
+        bytes memory result = new bytes(data.length);
+
+        // Store the function signature
+        for (uint256 i = 0; i < 4; i++) {
+            result[i] = data[i];
+        }
+
+        // Perform a bitwise AND on the mask and data at 32 byte width
+        for (uint256 i = 0; i < nargs; i++) {
             assembly {
-                mstore(add(result, add(0x20, i)), and(mload(add(mask, add(0x20, i))), mload(add(args, add(0x20, i)))))
+                mstore(
+                    add(result, add(0x24, i)),
+                    and(
+                        mload(add(data, add(0x24, i))),
+                        not(sub(and(0x01, shr(i, mask)), 1))
+                    )
+                )
             }
         }
-        return keccak256(abi.encode(target, selector, result));
+        return keccak256(abi.encode(target, result, mask));
     }
 
     // Register a bounty for a particular function, on a particular contract
     // The mask is used to specify concrete vs variable arguments
+    // A mask bit N of 1 means the supplied argument is a concrete value at argument N
+    // A mask of 0 means the supplied argument is ignored for payout (any valid transaction works)
     // For example, you can incentivize cat.bite("USDC-A", anyUrnAddress)
-    function register(address target, bytes4 selector, bytes calldata mask, bytes calldata args, uint256 rate) external auth {
-        bytes32 key = generateKey(target, selector, mask, args);
+    function register(address target, bytes calldata data, uint256 mask, uint256 rate) external auth {
+        bytes32 key = generateKey(target, data, mask);
         if (rate > 0) {
             bounties[key] = Bounty({
                 rate: rate,
                 rho: block.timestamp
             });
 
-            emit Register(target, selector, mask, args, rate);
+            emit Register(target, data, mask, rate);
         } else {
             delete bounties[key];
 
-            emit Unregister(target, selector, mask, args);
+            emit Unregister(target, data, mask);
         }
     }
 
     // Execute a function and claim a bounty
-    function claim(address usr, address target, bytes4 selector, bytes calldata mask, bytes calldata args) external lock {
-        bytes32 key = generateKey(target, selector, mask, args);
-        (bool success,) = target.call(abi.encodeWithSelector(selector, args));
+    function claim(address usr, address target, bytes calldata data, uint256 mask) external lock {
+        bytes32 key = generateKey(target, data, mask);
+        (bool success,) = target.call(data);
         if (success) {
             // You've earned the reward (might be 0)
             uint256 reward = mul(sub(block.timestamp, bounties[key].rho), bounties[key].rate);
             vat.suck(vow, usr, reward);
             bounties[key].rho = block.timestamp;
 
-            emit Claim(target, selector, mask, args, reward);
+            emit Claim(target, data, mask, reward);
         } else {
             revert("DssCron/call-revert");
         }

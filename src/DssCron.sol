@@ -33,6 +33,9 @@ contract DssCron {
     // --- Events ---
     event Rely(address indexed usr);
     event Deny(address indexed usr);
+    event Register(address target, bytes4 selector, bytes mask, bytes args, uint256 rate);
+    event Unregister(address target, bytes4 selector, bytes mask, bytes args);
+    event Claim(address target, bytes4 selector, bytes mask, bytes args, uint256 reward);
 
     // --- Init ---
     constructor(address vat_, address vow_) public {
@@ -77,8 +80,12 @@ contract DssCron {
                 rate: rate,
                 rho: block.timestamp
             });
+
+            emit Register(target, selector, mask, args, rate);
         } else {
             delete bounties[key];
+
+            emit Unregister(target, selector, mask, args);
         }
     }
 
@@ -88,8 +95,11 @@ contract DssCron {
         (bool success,) = target.call(abi.encodeWithSelector(selector, args));
         if (success) {
             // You've earned the reward (might be 0)
-            vat.suck(vow, usr, mul(sub(block.timestamp, bounties[key].rho), bounties[key].rate));
+            uint256 reward = mul(sub(block.timestamp, bounties[key].rho), bounties[key].rate);
+            vat.suck(vow, usr, reward);
             bounties[key].rho = block.timestamp;
+
+            emit Claim(target, selector, mask, args, reward);
         } else {
             revert("DssCron/call-revert");
         }
